@@ -192,6 +192,8 @@ class PeerStream extends HTMLVideoElement {
 
 		this.ws.onopen = () => {
 			console.info("✅", this.ws);
+			this.reconnecting = false;
+			this.startWatchdog();
 		};
 
 		this.ws.onmessage = (e) => {
@@ -204,6 +206,32 @@ class PeerStream extends HTMLVideoElement {
 			clearTimeout(this.reconnect);
 			this.reconnect = setTimeout(() => this.connectedCallback(), 3000);
 		};
+	}
+
+	// 信令连上了却迟迟拿不到视频流（UE 进程已退出 / 实例没被拉起），
+	// 主动重连一次，让信令服务器收到新的 player 连接，从而重新拉起 UE 实例。
+	startWatchdog() {
+		clearTimeout(this.watchdog);
+		this.watchdog = setTimeout(() => {
+			if (this.pc.connectionState === "connected") return;
+			this.forceReconnect("no video stream after timeout");
+		}, 20 * 1000);
+	}
+
+	forceReconnect(reason) {
+		if (this.reconnecting) return;
+		this.reconnecting = true;
+		console.warn("♻️ force reconnect:", reason);
+		clearTimeout(this.watchdog);
+		clearTimeout(this.disconnectedTimer);
+		try { this.pc.close(); } catch (e) { }
+		this.ws.onclose = null;
+		try { this.ws.close(1000); } catch (e) { }
+		clearTimeout(this.reconnect);
+		this.reconnect = setTimeout(() => {
+			this.reconnecting = false;
+			this.connectedCallback();
+		}, 2000);
 	}
 
 	disconnectedCallback() {
@@ -233,6 +261,7 @@ class PeerStream extends HTMLVideoElement {
 			return;
 		}
 		if (msg.type === "offer") {
+			clearTimeout(this.watchdog);
 			this.setupPeerConnection();
 
 			const offer = new RTCSessionDescription(msg);
@@ -550,6 +579,26 @@ class PeerStream extends HTMLVideoElement {
 
 		this.pc.ondatachannel = (e) => {
 			this.setupDataChannel(e);
+		};
+
+		// UE 进程退出后 pc 会进入 failed/disconnected，此前代码不会做任何处理，
+		// 于是画面永远停在最后一帧，只能手动刷新页面。
+		this.pc.onconnectionstatechange = () => {
+			const state = this.pc.connectionState;
+			console.info("pc connection state:", state);
+			if (state === "connected") {
+				clearTimeout(this.watchdog);
+				clearTimeout(this.disconnectedTimer);
+			} else if (state === "failed") {
+				this.forceReconnect("peerconnection failed");
+			} else if (state === "disconnected") {
+				clearTimeout(this.disconnectedTimer);
+				this.disconnectedTimer = setTimeout(() => {
+					if (this.pc.connectionState !== "connected") {
+						this.forceReconnect("peerconnection disconnected");
+					}
+				}, 5 * 1000);
+			}
 		};
 	}
 

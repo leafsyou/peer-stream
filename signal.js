@@ -256,6 +256,11 @@ ENGINE.on("connection", (ue, req) => {
 			fe.ue = null;
 		});
 		print();
+		// UE 进程异常退出：还有前端在等，就尝试重新拉起一个实例
+		if (ENGINE.clients.size === 0 && PLAYER.clients.size > 0) {
+			console.warn(`Unreal Engine ${ue.req.url} closed, try to start a new one`);
+			StartExecUe();
+		}
 	};
 
 	ue.onerror;
