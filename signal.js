@@ -1,9 +1,16 @@
 "5.1.3";
 
-Object.assign(global, require("./signal.json"));
-
 const fs = require('fs')
+const path = require('path')
 const child_process = require('child_process')
+
+// 配置文件：node signal.js [config.json]，不传则用同目录的 signal.json
+global.CONFIG = path.resolve(__dirname, process.argv[2] || 'signal.json');
+
+// 开机自启动时需要带上和本次一样的参数，否则会退回默认配置
+const CONFIG_ARG = process.argv[2] ? ` "${global.CONFIG}"` : '';
+
+Object.assign(global, JSON.parse(fs.readFileSync(global.CONFIG, 'utf8')));
 
 ////////////////////////////////// 2024年6月 删除 !!!!
 if (global.env) {
@@ -19,7 +26,7 @@ if (global.env) {
 			(([key]) => key.startsWith("UE5_")).map(([key, value]) => value)
 		),
 	};
-	fs.promises.writeFile("./signal.json", JSON.stringify(signal));
+	fs.promises.writeFile(global.CONFIG, JSON.stringify(signal));
 	Object.assign(global, signal);
 	// fs.promises.rm('./.signal.js');
 }
@@ -266,7 +273,6 @@ ENGINE.on("connection", (ue, req) => {
 	ue.onerror;
 });
 
-const path = require("path");
 const { json } = require("node:stream/consumers");
 
 
@@ -327,8 +333,7 @@ async function Signal(request, response, HTTP) {
 
 	}
 
-	delete require.cache[require.resolve('./signal.json')]
-	let signal = require('./signal.json');
+	let signal = JSON.parse(await fs.promises.readFile(global.CONFIG, 'utf8'));
 
 	Object.assign(signal, newSignal);
 
@@ -344,7 +349,7 @@ async function Signal(request, response, HTTP) {
 		await global.Boot()
 	}
 
-	await fs.promises.writeFile(__dirname + '/signal.json', JSON.stringify(signal, null, '\t'));
+	await fs.promises.writeFile(global.CONFIG, JSON.stringify(signal, null, '\t'));
 
 	await new Promise(res => {
 		response.end(JSON.stringify(newSignal), res);
@@ -422,6 +427,13 @@ global.serve = async (PORT) => {
 					res.end('', () => { });
 				});
 			return
+		}
+
+		// 使用自定义配置文件时，配置页也读取该文件（否则页面展示的是同目录的 signal.json）
+		if (req.url === '/signal.json' && global.CONFIG !== path.join(__dirname, 'signal.json')) {
+			res.setHeader('Content-Type', 'application/json');
+			fs.createReadStream(global.CONFIG).on('error', () => res.end()).pipe(res);
+			return;
 		}
 
 		if (req.url === '/') req.url = '/signal.html'
@@ -758,11 +770,11 @@ global.Boot = async function () {
 	if (global.boot) {
 		switch (process.platform) {
 			case "win32": {
-				const bat = `"${process.argv[0]}" "${__filename}"`;
+				const bat = `"${process.argv[0]}" "${__filename}"${CONFIG_ARG}`;
 				return fs.promises.writeFile(signal_bat, bat);
 			}
 			case "linux": {
-				const sh = `nohup "${process.argv[0]}" "${__filename}" > "${__dirname}/signal.log" &`;
+				const sh = `nohup "${process.argv[0]}" "${__filename}"${CONFIG_ARG} > "${__dirname}/signal.log" &`;
 				await fs.promises.writeFile(signal_sh, sh);
 				await fs.promises.chmod(signal_sh, 0o777)
 			}
