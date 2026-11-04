@@ -106,6 +106,10 @@ class PeerStream extends HTMLVideoElement {
 		this.ws = { send() { }, close() { } }; // WebSocket
 		this.pc = { close() { } }; // RTCPeerConnection
 
+		// 输入诊断开关：页面 URL 带 ?psdebug=1 时，把收到的浏览器事件和发往 UE 的消息打印到控制台
+		// 必须在注册事件前赋值，否则 registerMouseHoverEvents 里的监听不会生效
+		this.debugInput = new URLSearchParams(location.search).has("psdebug");
+
 		this.setupVideo();
 		this.registerKeyboardEvents();
 		this.registerMouseHoverEvents();
@@ -463,6 +467,17 @@ class PeerStream extends HTMLVideoElement {
 					}
 				}
 
+				if (this.debugInput) {
+					console.log("[ps-input] protocol remap", {
+						Direction: protocol.Direction,
+						MouseEnter: SEND.MouseEnter,
+						MouseDown: SEND.MouseDown,
+						MouseUp: SEND.MouseUp,
+						MouseMove: SEND.MouseMove,
+						MouseWheel: SEND.MouseWheel,
+					});
+				}
+
 				this.dc.send(new Uint8Array([SEND.RequestInitialSettings]));
 				this.dc.send(new Uint8Array([SEND.RequestQualityControl]));
 
@@ -794,25 +809,43 @@ class PeerStream extends HTMLVideoElement {
 	registerMouseHoverEvents() {
 		this.registerMouseEnterAndLeaveEvents();
 
-		this.onmousemove = (e) => {
-			this.emitMouseMove(e.offsetX, e.offsetY, e.movementX, e.movementY);
-			e.preventDefault();
-		};
+		if (this.debugInput) {
+			for (const type of ["pointerdown", "pointerup", "pointermove", "pointercancel", "lostpointercapture", "mousedown", "mouseup", "contextmenu"]) {
+				this.addEventListener(type, (e) => {
+					if (type.endsWith("move") && e.buttons === 0) return; // 只记录按住键时的移动
+					console.log("[ps-input ↓]", type, { button: e.button, buttons: e.buttons, pointerType: e.pointerType, x: e.offsetX, y: e.offsetY });
+				}, true);
+			}
+		}
 
-		this.onmousedown = (e) => {
+		// pointer lock 模式遗留的 mouse 事件处理器，切回悬停模式前先清掉，避免双重输入
+		this.onmousemove = this.onmousedown = this.onmouseup = null;
+
+		// 用 Pointer Events 接收鼠标输入，并在 pointerdown 时对元素 setPointerCapture：
+		// Linux 的 Chromium 在右键“按下”阶段就派发 contextmenu，捕获能保证整个按键过程中的
+		// pointermove / pointerup 都派发到本元素，不会被右键菜单逻辑吞掉（Windows 行为不变）
+		this.onpointerdown = (e) => {
+			if (e.pointerType !== "mouse") return; // 触摸由 registerFakeMouseEvents 处理
+			try { this.setPointerCapture(e.pointerId); } catch { }
 			this.emitMouseDown(e.button, e.offsetX, e.offsetY);
 			e.preventDefault();
 		};
 
-		this.onmouseup = (e) => {
+		this.onpointermove = (e) => {
+			if (e.pointerType !== "mouse") return;
+			this.emitMouseMove(e.offsetX, e.offsetY, e.movementX, e.movementY);
+		};
+
+		this.onpointerup = (e) => {
+			if (e.pointerType !== "mouse") return;
 			this.emitMouseUp(e.button, e.offsetX, e.offsetY);
 			e.preventDefault();
 		};
 
-		// When the context menu is shown then it is safest to release the button which was pressed when the event happened. This will guarantee we will get at least one mouse up corresponding to a mouse down event. Otherwise the mouse can get stuck.
-		// https://github.com/facebook/react/issues/5531
+		// 屏蔽浏览器右键菜单。
+		// 注意：不要在这里补发 MouseUp —— Linux 上它会跟在 MouseDown 后立刻触发，
+		// 等于按下瞬间就把键松开，右键拖拽会直接失效；抬起由 pointerup 负责
 		this.oncontextmenu = (e) => {
-			//this.emitMouseUp(e.button, e.offsetX, e.offsetY);
 			e.preventDefault();
 			return false;
 		};
@@ -827,6 +860,9 @@ class PeerStream extends HTMLVideoElement {
 		this.registerMouseEnterAndLeaveEvents();
 
 		console.info("mouse locked in, ESC to exit");
+
+		// 清掉悬停模式的 pointer 事件处理器，锁定期间只用 mouse movement 事件
+		this.onpointerdown = this.onpointermove = this.onpointerup = this.oncontextmenu = null;
 
 		const { clientWidth, clientHeight } = this;
 		let x = clientWidth / 2;
@@ -881,6 +917,10 @@ class PeerStream extends HTMLVideoElement {
 		data.setInt16(5, deltaX, true);
 		data.setInt16(7, deltaY, true);
 		this.dc.send(data);
+		// 节流打印，避免刷屏
+		if (this.debugInput && (this._moveLog = (this._moveLog || 0) + 1) % 10 === 0) {
+			console.log("[ps-input ↑] MouseMove", coord.x, coord.y);
+		}
 		this.lastmouseTime = new Date()
 	}
 
@@ -892,6 +932,7 @@ class PeerStream extends HTMLVideoElement {
 		data.setUint16(2, coord.x, true);
 		data.setUint16(4, coord.y, true);
 		this.dc.send(data);
+		if (this.debugInput) console.log("[ps-input ↑] MouseDown", button, coord.x, coord.y);
 		if (this.enableChinese) {
 			this.dc.send(new Uint8Array([SEND.FindFocus]))
 		}
@@ -905,6 +946,7 @@ class PeerStream extends HTMLVideoElement {
 		data.setUint16(2, coord.x, true);
 		data.setUint16(4, coord.y, true);
 		this.dc.send(data);
+		if (this.debugInput) console.log("[ps-input ↑] MouseUp", button, coord.x, coord.y);
 	}
 
 	emitMouseWheel(delta, x, y) {

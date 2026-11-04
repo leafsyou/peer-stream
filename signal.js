@@ -436,6 +436,8 @@ global.serve = async (PORT) => {
 			return;
 		}
 
+		// 静态文件忽略查询串，否则 /signal.html?x=1 会被拼成文件名导致读不到
+		req.url = req.url.split('?')[0];
 		if (req.url === '/') req.url = '/signal.html'
 		// serve static files
 		const read = fs.createReadStream(
