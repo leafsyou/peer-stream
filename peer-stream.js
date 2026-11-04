@@ -825,19 +825,19 @@ class PeerStream extends HTMLVideoElement {
 		// Linux 的 Chromium 在右键“按下”阶段就派发 contextmenu，捕获能保证整个按键过程中的
 		// pointermove / pointerup 都派发到本元素，不会被右键菜单逻辑吞掉（Windows 行为不变）
 		this.onpointerdown = (e) => {
-			if (e.pointerType !== "mouse") return; // 触摸由 registerFakeMouseEvents 处理
+			if (e.pointerType === "touch") return; // 触摸由 registerFakeMouseEvents 处理
 			try { this.setPointerCapture(e.pointerId); } catch { }
 			this.emitMouseDown(e.button, e.offsetX, e.offsetY);
 			e.preventDefault();
 		};
 
 		this.onpointermove = (e) => {
-			if (e.pointerType !== "mouse") return;
+			if (e.pointerType === "touch") return;
 			this.emitMouseMove(e.offsetX, e.offsetY, e.movementX, e.movementY);
 		};
 
 		this.onpointerup = (e) => {
-			if (e.pointerType !== "mouse") return;
+			if (e.pointerType === "touch") return;
 			this.emitMouseUp(e.button, e.offsetX, e.offsetY);
 			e.preventDefault();
 		};
@@ -861,8 +861,9 @@ class PeerStream extends HTMLVideoElement {
 
 		console.info("mouse locked in, ESC to exit");
 
-		// 清掉悬停模式的 pointer 事件处理器，锁定期间只用 mouse movement 事件
-		this.onpointerdown = this.onpointermove = this.onpointerup = this.oncontextmenu = null;
+		// 清掉悬停模式的 pointer 事件处理器，锁定期间只用 mouse movement 事件；
+		// oncontextmenu 保留，锁定期间也要屏蔽浏览器右键菜单
+		this.onpointerdown = this.onpointermove = this.onpointerup = null;
 
 		const { clientWidth, clientHeight } = this;
 		let x = clientWidth / 2;
